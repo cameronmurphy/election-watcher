@@ -163,6 +163,11 @@ jobs:
             exit 1
           }
 
+      # Before the launch test: running the app writes a browser profile into its folder.
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path 'dist/windows/Election Watcher' -DestinationPath dist/Election-Watcher-windows-x64.zip
+
       - name: Launch test
         shell: pwsh
         run: |
@@ -175,10 +180,6 @@ jobs:
             exit 1
           }
           Stop-Process -Id $app.Id -Force
-
-      - name: Package
-        shell: pwsh
-        run: Compress-Archive -Path 'dist/windows/Election Watcher' -DestinationPath dist/Election-Watcher-windows-x64.zip
 
       - uses: actions/upload-artifact@v7
         with:
