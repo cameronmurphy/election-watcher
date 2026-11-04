@@ -1,7 +1,8 @@
 import { INJECT } from "./inject.ts";
 
-const NEEDLE_URL =
-  "https://www.nytimes.com/interactive/2026/11/03/us/elections/results-needle-senate-house-forecast.html";
+// The homepage's compact needles, rather than the forecast page, which sits behind a
+// registration wall. The app shows that wall if it appears; it never hides it.
+const NEEDLE_URL = "https://www.nytimes.com/";
 const DEFAULT_WIDTH = 520;
 const FULL_SIZE = [1180, 820] as const;
 const TICK_MS = 500;

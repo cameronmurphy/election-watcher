@@ -8,7 +8,7 @@ export const INJECT = String.raw`
   // Stay out of the loading page and any third-party sign-in page.
   if (window.__ew || !/(^|\.)nytimes\.com$/.test(location.hostname)) return;
   const api = bindings;
-  const WIDTH = 440, PAD = 12;
+  const WIDTH = 300, PAD = 12;
 
   const page = new CSSStyleSheet();
   page.replaceSync([
@@ -84,7 +84,7 @@ export const INJECT = String.raw`
     const marked = [...document.querySelectorAll('[data-ew]')];
     if (marked.length === 2) return marked;
     marked.forEach((el) => el.removeAttribute('data-ew'));
-    const found = [...document.querySelectorAll('.needle-section')]
+    const found = [...document.querySelectorAll('.needle-wrapper')]
       .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; })
       .slice(0, 2);
     if (found.length < 2) return null;
