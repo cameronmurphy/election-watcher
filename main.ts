@@ -4,6 +4,8 @@ import { INJECT } from "./inject.ts";
 // registration wall. The app shows that wall if it appears; it never hides it.
 const NEEDLE_URL = "https://www.nytimes.com/";
 const DEFAULT_WIDTH = 520;
+const MIN_WIDTH = 280;
+const MAX_WIDTH = 720; // NYT switches to a flat desktop layout at about 740px.
 const FULL_SIZE = [1180, 820] as const;
 const TICK_MS = 500;
 const FIND_TIMEOUT_MS = 25_000;
@@ -44,7 +46,7 @@ let autoFull = false; // Full page was forced by a sign-in wall, not chosen by t
 let screenArea: Screen | null = null;
 let lastSeen = Date.now();
 let compact: { size: [number, number]; position: [number, number] } | null = null;
-let dragOrigin: [number, number] | null = null;
+let contentRatio: number | null = null;
 
 const pair = (v: unknown): [number, number] => {
   if (Array.isArray(v)) return [v[0], v[1]];
@@ -73,13 +75,63 @@ win.bind("ewClose", () => Deno.exit(0));
 win.bind("ewSetMode", (m: unknown) => {
   if (m === "needles" || m === "full") setMode(m);
 });
-win.bind("ewDragStart", () => {
-  dragOrigin = pair(win.getPosition());
+
+// The page measures in CSS pixels. The window API may not, on scaled Windows displays, so
+// each gesture works out the difference from the window's width as both sides see it.
+const gesture = (pageWidth: unknown) => {
+  const size = pair(win.getSize());
+  const scale = typeof pageWidth === "number" && pageWidth > 0 ? size[0] / pageWidth : 1;
+  return { size, position: pair(win.getPosition()), scale };
+};
+let active: ReturnType<typeof gesture> | null = null;
+
+win.bind("ewDragStart", (pageWidth: unknown) => {
+  active = gesture(pageWidth);
 });
 win.bind("ewDragBy", (dx: unknown, dy: unknown) => {
-  if (dragOrigin && typeof dx === "number" && typeof dy === "number") {
-    win.setPosition(dragOrigin[0] + dx, dragOrigin[1] + dy);
+  if (active && typeof dx === "number" && typeof dy === "number") {
+    win.setPosition(
+      Math.round(active.position[0] + dx * active.scale),
+      Math.round(active.position[1] + dy * active.scale),
+    );
   }
+});
+
+win.bind("ewResizeStart", (pageWidth: unknown) => {
+  active = gesture(pageWidth);
+});
+win.bind("ewResizeBy", (edge: unknown, dx: unknown, dy: unknown) => {
+  if (!active || typeof edge !== "string" || typeof dx !== "number" || typeof dy !== "number") {
+    return;
+  }
+  const [startWidth, startHeight] = active.size;
+  const [startX, startY] = active.position;
+  const ratio = contentRatio ?? startWidth / startHeight;
+  const minWidth = MIN_WIDTH * active.scale;
+
+  // Keeps the needles' proportions, so a corner follows whichever axis moved further.
+  const fromX = edge.includes("e")
+    ? startWidth + dx * active.scale
+    : edge.includes("w")
+    ? startWidth - dx * active.scale
+    : null;
+  const fromY = edge.includes("s")
+    ? (startHeight + dy * active.scale) * ratio
+    : edge.includes("n")
+    ? (startHeight - dy * active.scale) * ratio
+    : null;
+  const candidates = [fromX, fromY].filter((v): v is number => v !== null);
+  if (!candidates.length) return;
+
+  const maxWidth = MAX_WIDTH * active.scale;
+  const width = Math.round(Math.min(maxWidth, Math.max(minWidth, ...candidates)));
+  const height = Math.round(width / ratio);
+  win.setSize(width, height);
+  // The edges being dragged move; the opposite ones stay where they are.
+  win.setPosition(
+    edge.includes("w") ? startX + startWidth - width : startX,
+    edge.includes("n") ? startY + startHeight - height : startY,
+  );
 });
 
 // The page may not see the pointer while another app is active; the native events do.
@@ -101,6 +153,7 @@ async function tick() {
   }
   if (!result) return;
   if (result.screen) screenArea = result.screen;
+  if (result.ratio) contentRatio = result.ratio;
 
   if (mode === "full") {
     // Signed in: the wall has gone, so go back to the needles without being asked.

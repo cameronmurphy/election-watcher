@@ -39,6 +39,14 @@ export const INJECT = String.raw`
     '#back { display: none; }',
     '.full #layer { display: none; }',
     '.full #back { display: flex; }',
+    '.grip { position: absolute; }',
+    '[data-edge="n"], [data-edge="s"] { left: 14px; right: 14px; height: 6px; cursor: ns-resize; }',
+    '[data-edge="e"], [data-edge="w"] { top: 14px; bottom: 14px; width: 6px; cursor: ew-resize; }',
+    '[data-edge="n"] { top: 0; } [data-edge="s"] { bottom: 0; }',
+    '[data-edge="e"] { right: 0; } [data-edge="w"] { left: 0; }',
+    '[data-edge$="e"][data-edge^="n"], [data-edge$="w"][data-edge^="n"], [data-edge$="e"][data-edge^="s"], [data-edge$="w"][data-edge^="s"] { width: 14px; height: 14px; }',
+    '[data-edge="nw"] { top: 0; left: 0; cursor: nwse-resize; } [data-edge="se"] { bottom: 0; right: 0; cursor: nwse-resize; }',
+    '[data-edge="ne"] { top: 0; right: 0; cursor: nesw-resize; } [data-edge="sw"] { bottom: 0; left: 0; cursor: nesw-resize; }',
   ].join('\n'));
   root.adoptedStyleSheets = [ui];
   root.innerHTML =
@@ -47,7 +55,9 @@ export const INJECT = String.raw`
         '<button id="expand" title="Show the full page"><svg viewBox="0 0 14 14"><path d="M12 12 2.5 2.5M2.5 9V2.5H9"/></svg></button>' +
         '<span id="host">www.nytimes.com</span>' +
         '<button id="close"><svg viewBox="0 0 14 14"><path d="M2 2l10 10M12 2 2 12"/></svg>Close</button>' +
-      '</div></div>' +
+      '</div>' +
+      ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'].map((e) => '<div class="grip" data-edge="' + e + '"></div>').join('') +
+      '</div>' +
       '<button id="back">Back to needles</button>' +
     '</div>';
   const $ = (id) => root.getElementById(id);
@@ -61,25 +71,36 @@ export const INJECT = String.raw`
 
   // Frameless webviews have no native drag region, so the window is moved by hand.
   // Screen coordinates stay valid while the window moves underneath the pointer.
-  const layer = $('layer');
-  let start = null, pending = null;
-  layer.onpointerdown = (e) => {
-    if (e.button !== 0) return;
-    layer.setPointerCapture(e.pointerId);
-    start = { x: e.screenX, y: e.screenY };
-    api.ewDragStart();
+  const track = (el, begin, move) => {
+    let start = null, pending = null;
+    el.onpointerdown = (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      el.setPointerCapture(e.pointerId);
+      start = { x: e.screenX, y: e.screenY };
+      begin();
+    };
+    el.onpointermove = (e) => {
+      if (!start) return;
+      const flush = !pending;
+      pending = { x: e.screenX - start.x, y: e.screenY - start.y };
+      if (flush) requestAnimationFrame(() => { move(pending.x, pending.y); pending = null; });
+    };
+    el.onpointerup = el.onpointercancel = () => { start = null; };
   };
-  layer.onpointermove = (e) => {
-    if (!start) return;
-    const flush = !pending;
-    pending = { x: e.screenX - start.x, y: e.screenY - start.y };
-    if (flush) requestAnimationFrame(() => { api.ewDragBy(pending.x, pending.y); pending = null; });
-  };
-  layer.onpointerup = layer.onpointercancel = () => { start = null; };
+  track($('layer'), () => api.ewDragStart(innerWidth), (x, y) => api.ewDragBy(x, y));
+
+  // Frameless windows on Windows have no native resize border.
+  for (const grip of root.querySelectorAll('.grip')) {
+    const edge = grip.dataset.edge;
+    track(grip, () => api.ewResizeStart(innerWidth), (x, y) => api.ewResizeBy(edge, x, y));
+  }
+  addEventListener('resize', () => window.__ew.tick(lastMode));
 
   document.documentElement.addEventListener('pointerenter', () => window.__ew.hover(true));
   document.documentElement.addEventListener('pointerleave', () => window.__ew.hover(false));
 
+  let lastMode = 'needles';
   const pick = () => {
     const marked = [...document.querySelectorAll('[data-ew]')];
     if (marked.length === 2) return marked;
@@ -95,6 +116,7 @@ export const INJECT = String.raw`
   window.__ew = {
     hover: (on) => wrap.classList.toggle('hover', on),
     tick(mode) {
+      lastMode = mode;
       const html = document.documentElement;
       wrap.classList.toggle('full', mode === 'full');
       const needles = pick();
