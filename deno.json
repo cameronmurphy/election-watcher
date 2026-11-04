@@ -1,0 +1,14 @@
+{
+  "tasks": {
+    "dev": "deno desktop --no-check --hmr main.ts",
+    "build:mac": "deno desktop --no-check -o 'dist/mac/Election Watcher' main.ts",
+    "build:win": "deno desktop --no-check --target x86_64-pc-windows-msvc -o 'dist/windows/Election Watcher' main.ts"
+  },
+  "desktop": {
+    "app": {
+      "name": "Election Watcher",
+      "identifier": "com.camurphy.election-watcher"
+    },
+    "backend": "webview"
+  }
+}

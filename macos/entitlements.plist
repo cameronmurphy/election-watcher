@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- V8 generates machine code. Under the hardened runtime that notarization requires,
+       the app dies on launch (SIGTRAP, exit 133) without this. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>
