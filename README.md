@@ -43,4 +43,5 @@ gh secret set AC_API_ISSUER_ID
 
 Delete the exported `.p12` afterwards; it contains your private key.
 
-Windows builds are currently unsigned, so SmartScreen warns before they run.
+Windows builds are deliberately unsigned. SmartScreen warns on first launch: choose
+**More info**, then **Run anyway**.

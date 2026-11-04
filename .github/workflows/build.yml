@@ -151,9 +151,6 @@ jobs:
           }
           Stop-Process -Id $app.Id -Force
 
-      - name: Note that this build is unsigned
-        run: echo "::warning::Windows builds are unsigned, so SmartScreen will warn. See the README."
-
       - name: Package
         shell: pwsh
         run: Compress-Archive -Path 'dist/windows/Election Watcher' -DestinationPath dist/Election-Watcher-windows-x64.zip
