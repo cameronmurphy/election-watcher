@@ -1,9 +1,9 @@
 import { INJECT } from "./inject.ts";
 
-// The homepage's compact needles, rather than the forecast page, which sits behind a
+// The homepage's compact map and needles, rather than the forecast page, which sits behind a
 // registration wall. The app shows that wall if it appears; it never hides it.
-const NEEDLE_URL = "https://www.nytimes.com/";
-const DEFAULT_WIDTH = 520;
+const HOME_URL = "https://www.nytimes.com/";
+const DEFAULT_WIDTH = 420;
 const MIN_WIDTH = 280;
 const MAX_WIDTH = 720; // NYT switches to a flat desktop layout at about 740px.
 const FULL_SIZE = [1180, 820] as const;
@@ -11,7 +11,7 @@ const TICK_MS = 500;
 const FIND_TIMEOUT_MS = 25_000;
 const RELOAD_MS = 15 * 60_000; // Safety net in case the page's own polling stalls.
 
-type Mode = "needles" | "full";
+type View = "map" | "needles";
 type Screen = { x: number; y: number; width: number; height: number };
 type Tick = { found: boolean; gated?: boolean; ratio?: number; screen?: Screen };
 
@@ -22,7 +22,7 @@ const BrowserWindow = (Deno as any).BrowserWindow;
 // A small local page shows immediately, so startup doesn't wait on a server.
 Deno.serve(() =>
   new Response(
-    `<body style="margin:0;height:100vh;display:grid;place-items:center;font:500 13px -apple-system,'Segoe UI',sans-serif;color:#666">Loading needles…</body>`,
+    `<body style="margin:0;height:100vh;display:grid;place-items:center;font:500 13px -apple-system,'Segoe UI',sans-serif;color:#666">Loading…</body>`,
     { headers: { "content-type": "text/html; charset=utf-8" } },
   )
 );
@@ -35,12 +35,13 @@ const startup = new BrowserWindow();
 const win = new BrowserWindow({
   title: "Election Watcher",
   width: DEFAULT_WIDTH,
-  height: 190,
+  height: 390,
   frameless: true,
   alwaysOnTop: true,
 });
 
-let mode: Mode = "needles";
+let view: View = "map";
+let full = false; // Showing the whole page rather than just the map or needles.
 let placed = false;
 let autoFull = false; // Full page was forced by a sign-in wall, not chosen by the user.
 let screenArea: Screen | null = null;
@@ -54,11 +55,11 @@ const pair = (v: unknown): [number, number] => {
   return "width" in o ? [o.width, o.height] : [o.x, o.y];
 };
 
-async function setMode(next: Mode) {
-  if (next === mode) return;
-  mode = next;
+async function setFull(next: boolean) {
+  if (next === full) return;
+  full = next;
   lastSeen = Date.now();
-  if (next === "full") {
+  if (next) {
     compact = { size: pair(win.getSize()), position: pair(win.getPosition()) };
     win.setSize(...FULL_SIZE);
     win.setPosition((screenArea?.x ?? 0) + 60, (screenArea?.y ?? 0) + 60);
@@ -68,12 +69,18 @@ async function setMode(next: Mode) {
     win.setSize(...compact.size);
     win.setPosition(...compact.position);
   }
-  await win.navigate(NEEDLE_URL);
+  await win.navigate(HOME_URL);
 }
 
 win.bind("ewClose", () => Deno.exit(0));
-win.bind("ewSetMode", (m: unknown) => {
-  if (m === "needles" || m === "full") setMode(m);
+win.bind("ewSetFull", (next: unknown) => {
+  if (typeof next === "boolean") setFull(next);
+});
+win.bind("ewSwapView", () => {
+  if (full) return;
+  view = view === "map" ? "needles" : "map";
+  lastSeen = Date.now();
+  tick();
 });
 
 // The page measures in CSS pixels. The window API may not, on scaled Windows displays, so
@@ -134,6 +141,18 @@ win.bind("ewResizeBy", (edge: unknown, dx: unknown, dy: unknown) => {
   );
 });
 
+// Matches the window to what it's showing, which changes when swapping views. The bottom edge
+// stays put, since that's where the window starts out, unless that would leave the screen.
+function fit(ratio: number, area: Screen) {
+  const [width, height] = pair(win.getSize());
+  const [x, y] = pair(win.getPosition());
+  const next = Math.round(width / ratio);
+  if (Math.abs(next - height) <= height * 0.02) return;
+  win.setSize(width, next);
+  const lowest = area.y + area.height - next;
+  win.setPosition(x, Math.max(area.y, Math.min(y + height - next, lowest)));
+}
+
 // The page may not see the pointer while another app is active; the native events do.
 const hover = (on: boolean) =>
   win.executeJs(`window.__ew && window.__ew.hover(${on}), 0`).catch(() => {});
@@ -145,7 +164,7 @@ async function tick() {
   let result: Tick | undefined;
   try {
     const reply = await win.executeJs(
-      `${INJECT}; window.__ew ? window.__ew.tick(${JSON.stringify(mode)}) : { found: false }`,
+      `${INJECT}; window.__ew ? window.__ew.tick(${JSON.stringify(view)}, ${full}) : { found: false }`,
     );
     if (reply?.ok) result = reply.value;
   } catch {
@@ -155,11 +174,11 @@ async function tick() {
   if (result.screen) screenArea = result.screen;
   if (result.ratio) contentRatio = result.ratio;
 
-  if (mode === "full") {
-    // Signed in: the wall has gone, so go back to the needles without being asked.
+  if (full) {
+    // Signed in: the wall has gone, so go back without being asked.
     if (autoFull && result.found) {
       autoFull = false;
-      await setMode("needles");
+      await setFull(false);
     }
     return;
   }
@@ -172,21 +191,23 @@ async function tick() {
       const { x, y, width, height: screenHeight } = result.screen;
       win.setSize(DEFAULT_WIDTH, height);
       win.setPosition(x + width - DEFAULT_WIDTH - 24, y + screenHeight - height - 24);
+    } else if (placed && result.ratio && result.screen) {
+      fit(result.ratio, result.screen);
     }
   } else if (result.gated || Date.now() - lastSeen > FIND_TIMEOUT_MS) {
     // A sign-in wall or bot check, which the user has to handle themselves.
     autoFull = true;
-    await setMode("full");
+    await setFull(true);
   }
 }
 
 setTimeout(() => {
   startup.close();
-  win.navigate(NEEDLE_URL);
+  win.navigate(HOME_URL);
   lastSeen = Date.now();
   setInterval(tick, TICK_MS);
 }, 300);
 
 setInterval(() => {
-  if (mode === "needles") win.reload();
+  if (!full) win.reload();
 }, RELOAD_MS);

@@ -8,15 +8,24 @@ export const INJECT = String.raw`
   // Stay out of the loading page and any third-party sign-in page.
   if (window.__ew || !/(^|\.)nytimes\.com$/.test(location.hostname)) return;
   const api = bindings;
-  const WIDTH = 300, PAD = 12;
+  const PAD = 12;
+  // Needles are drawn at a set width and scaled to fit. The map has no set width: it sizes
+  // itself from its on-screen box, so scaling it would make it draw too small.
+  const VIEWS = {
+    map: { selector: '.national-map-component-wrapper', count: 1 },
+    needles: { selector: '.needle-wrapper', count: 2, width: 300 },
+  };
 
   const page = new CSSStyleSheet();
   page.replaceSync([
-    'html[data-ew-mode="needles"], html[data-ew-mode="needles"] body { overflow: hidden !important; background: #fff !important; }',
-    'html[data-ew-mode="needles"] body *:not([data-ew], [data-ew] *) { visibility: hidden !important; pointer-events: none !important; }',
-    'html[data-ew-mode="needles"] [data-ew] { position: fixed !important; visibility: visible !important; margin: 0 !important; width: ' + WIDTH + 'px !important; max-width: none !important; top: var(--ew-top) !important; transform: scale(var(--ew-scale)) !important; transform-origin: 0 0 !important; pointer-events: none !important; }',
-    'html[data-ew-mode="needles"] [data-ew="0"] { left: var(--ew-left0) !important; }',
-    'html[data-ew-mode="needles"] [data-ew="1"] { left: var(--ew-left1) !important; }',
+    'html[data-ew-mode="compact"], html[data-ew-mode="compact"] body { overflow: hidden !important; background: #fff !important; }',
+    'html[data-ew-mode="compact"] body *:not([data-ew], [data-ew] *) { visibility: hidden !important; pointer-events: none !important; }',
+    'html[data-ew-mode="compact"] [data-ew] { position: fixed !important; visibility: visible !important; margin: 0 !important; width: var(--ew-width) !important; max-width: none !important; top: var(--ew-top) !important; transform: scale(var(--ew-scale)) !important; transform-origin: 0 0 !important; pointer-events: none !important; }',
+    'html[data-ew-mode="compact"] [data-ew="0"] { left: var(--ew-left0) !important; }',
+    'html[data-ew-mode="compact"] [data-ew="1"] { left: var(--ew-left1) !important; }',
+    'html[data-ew-mode="compact"] [data-ew] .full-results-link { display: none !important; }',
+    // The hover bar has its own Senate and House buttons in the same spot.
+    'html[data-ew-hover] [data-ew] .toggle { visibility: hidden !important; }',
     '#__ew_host { position: fixed; z-index: 2147483647; visibility: visible !important; inset: 0; }',
     'html[data-ew-mode="full"] #__ew_host { inset: auto 14px 14px auto; }',
   ].join('\n'));
@@ -36,6 +45,10 @@ export const INJECT = String.raw`
     'button { display: flex; align-items: center; gap: 6px; height: 30px; min-width: 30px; padding: 0 9px; border: 0; border-radius: 7px; background: rgba(30,30,30,.88); color: inherit; font: inherit; }',
     'button:hover { background: rgba(70,70,70,.95); }',
     'svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }',
+    '#chamber { display: none; gap: 2px; }',
+    '.chambers #chamber { display: flex; }',
+    '.chambers #host { display: none; }',
+    '#chamber .on { background: #fff; color: #111; }',
     '#back { display: none; }',
     '.full #layer { display: none; }',
     '.full #back { display: flex; }',
@@ -54,19 +67,26 @@ export const INJECT = String.raw`
       '<div id="layer"><div id="scrim"></div><div id="bar">' +
         '<button id="expand" title="Show the full page"><svg viewBox="0 0 14 14"><path d="M12 12 2.5 2.5M2.5 9V2.5H9"/></svg></button>' +
         '<span id="host">www.nytimes.com</span>' +
+        '<div id="chamber"><button data-chamber="Senate">Senate</button><button data-chamber="House">House</button></div>' +
         '<button id="close"><svg viewBox="0 0 14 14"><path d="M2 2l10 10M12 2 2 12"/></svg>Close</button>' +
       '</div>' +
       ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'].map((e) => '<div class="grip" data-edge="' + e + '"></div>').join('') +
       '</div>' +
-      '<button id="back">Back to needles</button>' +
+      '<button id="back">Back</button>' +
     '</div>';
   const $ = (id) => root.getElementById(id);
   const wrap = $('wrap');
   document.documentElement.appendChild(host);
 
   $('close').onclick = () => api.ewClose();
-  $('expand').onclick = () => api.ewSetMode('full');
-  $('back').onclick = () => api.ewSetMode('needles');
+  $('expand').onclick = () => api.ewSetFull(true);
+  $('back').onclick = () => api.ewSetFull(false);
+  for (const b of root.querySelectorAll('[data-chamber]')) {
+    b.onclick = () => {
+      sessionStorage.setItem(CHAMBER_KEY, b.dataset.chamber);
+      window.__ew.tick(lastView, lastFull);
+    };
+  }
   for (const b of root.querySelectorAll('button')) b.onpointerdown = (e) => e.stopPropagation();
 
   // Frameless webviews have no native drag region, so the window is moved by hand.
@@ -95,46 +115,89 @@ export const INJECT = String.raw`
     const edge = grip.dataset.edge;
     track(grip, () => api.ewResizeStart(innerWidth), (x, y) => api.ewResizeBy(edge, x, y));
   }
-  addEventListener('resize', () => window.__ew.tick(lastMode));
+  addEventListener('resize', () => window.__ew.tick(lastView, lastFull));
+
+  // Windows keeps Win+N for itself, so Ctrl+N is the equivalent there. Unhandled, Ctrl+N
+  // would open a browser window on Windows.
+  addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'n') return;
+    e.preventDefault();
+    if (!e.repeat) api.ewSwapView();
+  }, true);
 
   document.documentElement.addEventListener('pointerenter', () => window.__ew.hover(true));
   document.documentElement.addEventListener('pointerleave', () => window.__ew.hover(false));
 
-  let lastMode = 'needles';
-  const pick = () => {
-    const marked = [...document.querySelectorAll('[data-ew]')];
-    if (marked.length === 2) return marked;
-    marked.forEach((el) => el.removeAttribute('data-ew'));
-    const found = [...document.querySelectorAll('.needle-wrapper')]
+  let lastView = 'map', lastFull = false;
+  const CHAMBER_KEY = '__ew_chamber'; // Survives the safety-net reload.
+
+  const find = (view) => {
+    const { selector, count, width } = VIEWS[view];
+    const els = [...document.querySelectorAll(selector)]
       .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; })
-      .slice(0, 2);
-    if (found.length < 2) return null;
-    found.forEach((el, i) => el.setAttribute('data-ew', String(i)));
-    return found;
+      .slice(0, count);
+    return els.length === count ? { view, width, els } : null;
+  };
+
+  // NYT may drop either one from the homepage, so show the other rather than nothing.
+  const pick = (view) => {
+    const other = view === 'map' ? 'needles' : 'map';
+    const shown = find(view) || (document.readyState === 'complete' ? find(other) : null);
+    const keep = shown ? shown.els : [];
+    document.querySelectorAll('[data-ew]').forEach((el) => {
+      if (!keep.includes(el)) el.removeAttribute('data-ew');
+    });
+    keep.forEach((el, i) => {
+      if (el.getAttribute('data-ew') !== String(i)) el.setAttribute('data-ew', String(i));
+    });
+    return shown;
+  };
+
+  // Mirrors NYT's Senate/House toggle, which sits under the window's drag layer.
+  const syncChamber = (map) => {
+    const nyt = map ? [...map.querySelectorAll('.toggle button')] : [];
+    const label = (b) => b.textContent.trim();
+    const wanted = sessionStorage.getItem(CHAMBER_KEY);
+    const target = nyt.find((b) => label(b) === wanted);
+    if (target && !target.classList.contains('active')) target.click();
+    const active = target || nyt.find((b) => b.classList.contains('active'));
+    wrap.classList.toggle('chambers', nyt.length > 1);
+    for (const b of root.querySelectorAll('[data-chamber]')) {
+      b.classList.toggle('on', !!active && label(active) === b.dataset.chamber);
+    }
   };
 
   window.__ew = {
-    hover: (on) => wrap.classList.toggle('hover', on),
-    tick(mode) {
-      lastMode = mode;
+    hover(on) {
+      wrap.classList.toggle('hover', on);
+      document.documentElement.toggleAttribute('data-ew-hover', on);
+    },
+    tick(view, full) {
+      lastView = view;
+      lastFull = full;
       const html = document.documentElement;
-      wrap.classList.toggle('full', mode === 'full');
-      const needles = pick();
-      // NYT's sign-in wall must stay visible: the needles sit behind it in the DOM, and
-      // isolating them would hide the wall rather than let the user sign in.
+      wrap.classList.toggle('full', full);
+      const shown = pick(view);
+      // NYT's sign-in wall must stay visible: the page sits behind it in the DOM, and
+      // isolating part of it would hide the wall rather than let the user sign in.
       const gate = document.querySelector('#gateway-content');
       const gated = !!gate && gate.getBoundingClientRect().height > 0;
-      html.dataset.ewMode = mode === 'needles' && needles && !gated ? 'needles' : 'full';
-      if (!needles || gated) return { found: false, gated };
+      html.dataset.ewMode = !full && shown && !gated ? 'compact' : 'full';
+      if (!shown || gated) return { found: false, gated };
 
-      const height = Math.max(...needles.map((el) => el.offsetHeight));
-      const w = WIDTH * 2 + PAD * 3, h = height + PAD * 2;
-      const scale = Math.min(innerWidth / w, innerHeight / h);
-      const x = (innerWidth - w * scale) / 2, y = (innerHeight - h * scale) / 2;
+      syncChamber(shown.view === 'map' ? shown.els[0] : null);
+      const count = shown.els.length;
+      const width = shown.width ?? innerWidth - PAD * 2;
+      html.style.setProperty('--ew-width', width + 'px');
+      const height = Math.max(...shown.els.map((el) => el.offsetHeight));
+      const w = width * count + PAD * (count + 1), h = height + PAD * 2;
+      const scale = shown.width ? Math.min(innerWidth / w, innerHeight / h) : 1;
+      const x = (innerWidth - w * scale) / 2, y = Math.max(0, (innerHeight - h * scale) / 2);
       html.style.setProperty('--ew-scale', scale);
       html.style.setProperty('--ew-top', (y + PAD * scale) + 'px');
-      html.style.setProperty('--ew-left0', (x + PAD * scale) + 'px');
-      html.style.setProperty('--ew-left1', (x + (WIDTH + PAD * 2) * scale) + 'px');
+      shown.els.forEach((_, i) => {
+        html.style.setProperty('--ew-left' + i, (x + (PAD + (width + PAD) * i) * scale) + 'px');
+      });
       return {
         found: true,
         ratio: w / h,
